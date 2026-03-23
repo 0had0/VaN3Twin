@@ -271,12 +271,27 @@ NrSlUeMac::GetNrSlTxOpportunities(const SfnSf& sfn)
     uint32_t mTotal = candSsResoA.size(); // total number of candidate single-slot resources
     int rsrpThrehold = GetSlThresPsschRsrp();
 
+    if (m_enableSpsLog)
+    {
+        m_lastSelectionRecord = SpsSelectionRecord();
+        m_lastSelectionRecord.timestamp_ms = Simulator::Now().GetMilliSeconds();
+        m_lastSelectionRecord.sfn_normalized = sfn.Normalize();
+        m_lastSelectionRecord.csrA_total = mTotal;
+        m_lastSelectionRecord.final_threshold_dBm = rsrpThrehold;
+        m_lastSelectionRecord.sensing_window_size = static_cast<uint16_t>(m_sensingData.size());
+    }
+
     if (m_enableSensing)
     {
         if (m_sensingData.size() == 0)
         {
             // no sensing
             nrCandSsResoA = GetNrSupportedList(sfn, candSsResoA);
+            if (m_enableSpsLog)
+            {
+                m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t>(nrCandSsResoA.size());
+                m_lastSelectionRecord.valid = true;
+            }
             return nrCandSsResoA;
         }
 
@@ -322,6 +337,7 @@ NrSlUeMac::GetNrSlTxOpportunities(const SfnSf& sfn)
         // slots at which this UE does not transmit. This is due to the half
         // duplex nature of the PHY.
         // step 6
+        uint8_t threshIterations = 0;
         do
         {
             // following assignment is needed since we might have to perform
@@ -404,6 +420,7 @@ NrSlUeMac::GetNrSlTxOpportunities(const SfnSf& sfn)
             // step 7. If the following while will not break, start over do-while
             // loop with rsrpThreshold increased by 3dB
             rsrpThrehold += 3;
+            threshIterations++;
             if (rsrpThrehold > 0)
             {
                 // 0 dBm is the maximum RSRP threshold level so if we reach
@@ -416,6 +433,26 @@ NrSlUeMac::GetNrSlTxOpportunities(const SfnSf& sfn)
             }
         } while (nrCandSsResoA.size() < (GetResourcePercentage() / 100.0) * mTotal);
 
+        if (m_enableSpsLog)
+        {
+            m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t>(nrCandSsResoA.size());
+            m_lastSelectionRecord.threshold_iterations = threshIterations;
+            // rsrpThrehold was incremented by 3 at the end of each iteration,
+            // so the actual last applied threshold is rsrpThrehold - 3
+            m_lastSelectionRecord.final_threshold_dBm = rsrpThrehold - 3;
+            // Build semicolon-delimited string of remaining candidate slot normalized SfnSf
+            std::ostringstream oss;
+            bool first = true;
+            for (const auto& slot : nrCandSsResoA)
+            {
+                if (!first) oss << ";";
+                oss << slot.sfn.Normalize();
+                first = false;
+            }
+            m_lastSelectionRecord.filtered_slot_indexes = oss.str();
+            m_lastSelectionRecord.valid = true;
+        }
+
         NS_LOG_DEBUG(nrCandSsResoA.size()
                      << " slots selected after sensing resource selection from " << mTotal
                      << " slots");
@@ -424,6 +461,11 @@ NrSlUeMac::GetNrSlTxOpportunities(const SfnSf& sfn)
     {
         // no sensing
         nrCandSsResoA = GetNrSupportedList(sfn, candSsResoA);
+        if (m_enableSpsLog)
+        {
+            m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t>(nrCandSsResoA.size());
+            m_lastSelectionRecord.valid = true;
+        }
         NS_LOG_DEBUG("No sensing: Total slots selected " << nrCandSsResoA.size());
     }
 
@@ -687,6 +729,14 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                         // counter we chose while creating the fresh grant
                         itGrantInfo->second.slResoReselCounter =
                             itGrantInfo->second.prevSlResoReselCounter;
+                        if (m_enableSpsLog)
+                        {
+                            m_lastSelectionRecord = SpsSelectionRecord();
+                            m_lastSelectionRecord.timestamp_ms = Simulator::Now().GetMilliSeconds();
+                            m_lastSelectionRecord.sfn_normalized = sfn.Normalize();
+                            m_lastSelectionRecord.valid = false;
+                            WriteSpsSelectionRow(sfn.Normalize(), true, 0);
+                        }
                         continue;
                     }
                     else
@@ -707,6 +757,11 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                 m_reselCounter = GetRndmReselectionCounter();
                 m_cResel = m_reselCounter * 10;
                 NS_LOG_DEBUG("Resel Counter " << +m_reselCounter << " cResel " << m_cResel);
+                if (m_enableSpsLog)
+                {
+                    WriteSensingWindowDump(sfn.Normalize());
+                    WritePrngStateDump(sfn.Normalize(), "before_selection");
+                }
                 std::list<NrSlSlotInfo> availbleReso = GetNrSlTxOpportunities(sfn);
                 // sensing or not, due to the semi-persistent scheduling, after
                 // calling the GetNrSlTxOpportunities method, and before asking the
@@ -717,12 +772,32 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                 // another if here because FilterTxOpportunities will return an empty
                 // list.
                 auto filteredReso = FilterTxOpportunities(availbleReso);
+                if (m_enableSpsLog)
+                {
+                    WritePrngStateDump(sfn.Normalize(), "after_sensing_filter");
+                }
                 if (!filteredReso.empty())
                 {
                     // we ask the scheduler for resources only if the filtered list is not empty.
                     NS_LOG_INFO("IMSI " << GetImsi() << " scheduling the destination "
                                         << itDst.first);
+                    if (m_enableSpsLog)
+                    {
+                        WritePrngStateDump(sfn.Normalize(), "before_scheduler");
+                    }
                     m_nrSlUeMacScheduler->SchedNrSlTriggerReq(itDst.first, filteredReso);
+                    if (m_enableSpsLog)
+                    {
+                        WritePrngStateDump(sfn.Normalize(), "after_scheduler");
+                        // Write selection row — selected slot will be the first in the grant
+                        uint64_t selectedSlotNorm = 0;
+                        auto grantIt = m_grantInfo.find(itDst.first);
+                        if (grantIt != m_grantInfo.end() && !grantIt->second.slotAllocations.empty())
+                        {
+                            selectedSlotNorm = grantIt->second.slotAllocations.begin()->sfn.Normalize();
+                        }
+                        WriteSpsSelectionRow(sfn.Normalize(), false, selectedSlotNorm);
+                    }
                     m_reselCounter = 0;
                     m_cResel = 0;
                 }
