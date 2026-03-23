@@ -33,6 +33,10 @@
 #include <ns3/random-variable-stream.h>
 #include <ns3/string.h>
 #include <ns3/uinteger.h>
+#include <ns3/node-list.h>
+#include <ns3/node.h>
+#include <ns3/mobility-model.h>
+#include <ns3/nr-ue-net-device.h>
 
 #include <algorithm>
 #include <bitset>
@@ -797,6 +801,7 @@ NrSlUeMac::DoNrSlSlotIndication(const SfnSf& sfn)
                             selectedSlotNorm = grantIt->second.slotAllocations.begin()->sfn.Normalize();
                         }
                         WriteSpsSelectionRow(sfn.Normalize(), false, selectedSlotNorm);
+                        WriteDistanceDump(sfn.Normalize());
                     }
                     m_reselCounter = 0;
                     m_cResel = 0;
@@ -1856,6 +1861,101 @@ NrSlUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
             << state[0] << "\t" << state[1] << "\t" << state[2] << "\t"
             << state[3] << "\t" << state[4] << "\t" << state[5]
             << std::endl;
+    outFile.close();
+}
+
+void
+NrSlUeMac::WriteDistanceDump(uint64_t sfnNorm)
+{
+    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(GetImsi()) + ".csv";
+    std::ofstream outFile;
+
+    if (m_spsDistanceFirstWrite)
+    {
+        m_spsDistanceFirstWrite = false;
+        outFile.open(filename.c_str(), std::ios_base::out);
+        if (!outFile.is_open())
+        {
+            NS_LOG_ERROR("Cannot open " << filename);
+            return;
+        }
+        outFile << "timestamp_ms,sfn_normalized,source_imsi,target_node_id,target_imsi,distance_m"
+                << std::endl;
+    }
+    else
+    {
+        outFile.open(filename.c_str(), std::ios_base::app);
+        if (!outFile.is_open())
+        {
+            NS_LOG_ERROR("Cannot open " << filename);
+            return;
+        }
+    }
+
+    // Find this UE's own node and mobility model
+    Ptr<MobilityModel> myMobility = nullptr;
+    uint64_t myImsi = GetImsi();
+
+    for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
+    {
+        Ptr<Node> node = *nit;
+        for (uint32_t d = 0; d < node->GetNDevices(); ++d)
+        {
+            Ptr<NrUeNetDevice> nrDev = DynamicCast<NrUeNetDevice>(node->GetDevice(d));
+            if (nrDev && nrDev->GetImsi() == myImsi)
+            {
+                myMobility = node->GetObject<MobilityModel>();
+                break;
+            }
+        }
+        if (myMobility)
+            break;
+    }
+
+    if (!myMobility)
+    {
+        NS_LOG_WARN("Could not find MobilityModel for IMSI " << myImsi);
+        outFile.close();
+        return;
+    }
+
+    int64_t nowMs = Simulator::Now().GetMilliSeconds();
+
+    // Iterate all other nodes and compute distances
+    for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
+    {
+        Ptr<Node> otherNode = *nit;
+        Ptr<MobilityModel> otherMobility = otherNode->GetObject<MobilityModel>();
+        if (!otherMobility)
+            continue;
+
+        // Find IMSI of the other node (if it has an NR device)
+        uint64_t otherImsi = 0;
+        for (uint32_t d = 0; d < otherNode->GetNDevices(); ++d)
+        {
+            Ptr<NrUeNetDevice> nrDev = DynamicCast<NrUeNetDevice>(otherNode->GetDevice(d));
+            if (nrDev)
+            {
+                otherImsi = nrDev->GetImsi();
+                break;
+            }
+        }
+
+        // Skip self
+        if (otherImsi == myImsi)
+            continue;
+
+        double distance = myMobility->GetDistanceFrom(otherMobility);
+
+        outFile << nowMs << ","
+                << sfnNorm << ","
+                << myImsi << ","
+                << otherNode->GetId() << ","
+                << otherImsi << ","
+                << std::setprecision(6) << distance
+                << std::endl;
+    }
+
     outFile.close();
 }
 

@@ -746,6 +746,16 @@ class NrSlUeMac : public NrUeMac
      * \param event Descriptive label for the snapshot point.
      */
     void WritePrngStateDump(uint64_t sfnNorm, const std::string& event);
+
+    /**
+     * \brief Write inter-vehicle distances at L_a selection time to CSV.
+     * Iterates all nodes via NodeList, computes Euclidean distance from
+     * this UE to every other UE, and writes one row per pair.
+     * \param sfnNorm Normalized slot number at selection time.
+     */
+    void WriteDistanceDump(uint64_t sfnNorm);
+
+    bool m_spsDistanceFirstWrite{true}; //!< First write flag for distance CSV header
 };
 
 } // namespace ns3
