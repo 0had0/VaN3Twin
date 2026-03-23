@@ -112,8 +112,8 @@ main (int argc, char *argv[])
   uint16_t channelUpdatePeriod = 500; //ms
   uint8_t mcs = 14;
 
-  // SPS logging
-  bool enableSpsLog = true;
+  // SPS logging — disabled by default so you can test the scenario first
+  bool enableSpsLog = false;
   std::string spsLogDir = "sps_logs/";
 
   CommandLine cmd;
