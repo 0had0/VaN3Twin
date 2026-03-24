@@ -487,20 +487,6 @@ class NrSlUeMac : public NrUeMac
             0}; //!< The counter to count the number of time a TB is tx/reTx in a reservation period
     };
 
-    /// Record of SB-SPS selection internals for per-vehicle CSV export
-    struct SpsSelectionRecord
-    {
-        int64_t timestamp_ms{0};
-        uint64_t sfn_normalized{0};
-        uint16_t csrA_total{0};            //!< Total candidate resources (mTotal)
-        uint16_t csrA_after_exclusion{0};  //!< L_a after RSRP exclusion
-        uint8_t  threshold_iterations{0};
-        int      final_threshold_dBm{-128};
-        uint16_t sensing_window_size{0};
-        std::string filtered_slot_indexes; //!< Semicolon-delimited normalized SfnSf
-        bool valid{false};
-    };
-
     /**
      * \brief Add NR Sidelink destination layer 2 Id
      *
@@ -718,44 +704,6 @@ class NrSlUeMac : public NrUeMac
      */
     TracedCallback<uint64_t, uint16_t, uint16_t, uint8_t, uint32_t, double> m_rxRlcPduWithTxRnti;
 
-    // --- SB-SPS selection logging ---
-    bool m_enableSpsLog{false};             //!< Toggle SPS selection CSV logging
-    std::string m_spsLogDir;                //!< Directory prefix for SPS log files
-    bool m_spsSelectionFirstWrite{true};    //!< Header tracking for selection CSV
-    bool m_spsSensingFirstWrite{true};      //!< Header tracking for sensing CSV
-    bool m_spsPrngFirstWrite{true};         //!< Header tracking for PRNG CSV
-    SpsSelectionRecord m_lastSelectionRecord; //!< Last selection record from GetNrSlTxOpportunities
-
-    /**
-     * \brief Write one row to the SPS selection CSV for this vehicle.
-     * \param sfnNorm Normalized slot number at decision time.
-     * \param resourceReused True if resource was kept via probResourceKeep.
-     * \param selectedSlotNorm Normalized SfnSf of selected slot (0 if reused).
-     */
-    void WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t selectedSlotNorm);
-
-    /**
-     * \brief Dump the current sensing window to CSV for this vehicle.
-     * \param sfnNorm Normalized slot number at dump time.
-     */
-    void WriteSensingWindowDump(uint64_t sfnNorm);
-
-    /**
-     * \brief Snapshot the PRNG state to CSV for this vehicle.
-     * \param sfnNorm Normalized slot number.
-     * \param event Descriptive label for the snapshot point.
-     */
-    void WritePrngStateDump(uint64_t sfnNorm, const std::string& event);
-
-    /**
-     * \brief Write inter-vehicle distances at L_a selection time to CSV.
-     * Iterates all nodes via NodeList, computes Euclidean distance from
-     * this UE to every other UE, and writes one row per pair.
-     * \param sfnNorm Normalized slot number at selection time.
-     */
-    void WriteDistanceDump(uint64_t sfnNorm);
-
-    bool m_spsDistanceFirstWrite{true}; //!< First write flag for distance CSV header
 };
 
 } // namespace ns3

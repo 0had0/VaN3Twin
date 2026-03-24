@@ -247,7 +247,7 @@ main (int argc, char *argv[])
   nrHelper->SetUeMacAttribute ("EnableBlindReTx", BooleanValue (true));
   nrHelper->SetUeMacAttribute ("SlThresPsschRsrp", IntegerValue (slThresPsschRsrp));
 
-  // Enable SPS selection logging
+  // Enable SPS selection logging on NrUeMac
   if (enableSpsLog)
     {
       nrHelper->SetUeMacAttribute ("EnableSpsSelectionLog", BooleanValue (true));
@@ -450,7 +450,7 @@ main (int argc, char *argv[])
       metSup->setCBRWindowValue (100);
       metSup->setCBRAlphaValue (0.1);
       metSup->setSimulationTimeValue (simTime);
-      metSup->startCheckCBR ();
+      // metSup->startCheckCBR (); // Disabled: node container empty at this point
     }
 
   /*** Setup application for dynamic nodes ***/
