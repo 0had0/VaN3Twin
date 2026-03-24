@@ -1301,12 +1301,36 @@ NrUeMac::GetNrSlTxOpportunities (const SfnSf& sfn)
   uint32_t mTotal = candSsResoA.size (); // total number of candidate single-slot resources
   int rsrpThrehold = GetSlThresPsschRsrp ();
 
+  if (m_enableSpsLog)
+    {
+      m_lastSelectionRecord = SpsSelectionRecord ();
+      m_lastSelectionRecord.timestamp_ms = Simulator::Now ().GetMilliSeconds ();
+      m_lastSelectionRecord.sfn_normalized = sfn.Normalize ();
+      m_lastSelectionRecord.csrA_total = static_cast<uint16_t> (mTotal);
+      m_lastSelectionRecord.final_threshold_dBm = rsrpThrehold;
+      m_lastSelectionRecord.sensing_window_size = static_cast<uint16_t> (m_sensingData.size ());
+    }
+
   if (m_enableSensing)
     {
       if (m_sensingData.size () == 0)
         {
           //no sensing
           nrCandSsResoA = GetNrSupportedList (sfn, candSsResoA);
+          if (m_enableSpsLog)
+            {
+              m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t> (nrCandSsResoA.size ());
+              m_lastSelectionRecord.threshold_iterations = 0;
+              // Build filtered slot indexes
+              std::ostringstream oss;
+              for (auto it = nrCandSsResoA.begin (); it != nrCandSsResoA.end (); ++it)
+                {
+                  if (it != nrCandSsResoA.begin ()) oss << ";";
+                  oss << it->sfn.Normalize ();
+                }
+              m_lastSelectionRecord.filtered_slot_indexes = oss.str ();
+              m_lastSelectionRecord.valid = true;
+            }
           return nrCandSsResoA;
         }
 
@@ -1351,6 +1375,7 @@ NrUeMac::GetNrSlTxOpportunities (const SfnSf& sfn)
       //slots at which this UE does not transmit. This is due to the half
       //duplex nature of the PHY.
       //step 6
+      uint8_t threshIterations = 0;
       do
         {
           //following assignment is needed since we might have to perform
@@ -1420,6 +1445,7 @@ NrUeMac::GetNrSlTxOpportunities (const SfnSf& sfn)
             }
           //step 7. If the following while will not break, start over do-while
           //loop with rsrpThreshold increased by 3dB
+          threshIterations++;
           rsrpThrehold += 3;
           if (rsrpThrehold > 0)
             {
@@ -1435,12 +1461,41 @@ NrUeMac::GetNrSlTxOpportunities (const SfnSf& sfn)
       while (nrCandSsResoA.size () < (GetResourcePercentage () / 100.0) * mTotal);
 
       NS_LOG_DEBUG (nrCandSsResoA.size () << " slots selected after sensing resource selection from " << mTotal << " slots");
+
+      if (m_enableSpsLog)
+        {
+          m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t> (nrCandSsResoA.size ());
+          m_lastSelectionRecord.threshold_iterations = threshIterations;
+          m_lastSelectionRecord.final_threshold_dBm = rsrpThrehold - 3; // -3 because it was incremented before the while check
+          // Build filtered slot indexes from remaining candidates
+          std::ostringstream oss;
+          for (auto it = nrCandSsResoA.begin (); it != nrCandSsResoA.end (); ++it)
+            {
+              if (it != nrCandSsResoA.begin ()) oss << ";";
+              oss << it->sfn.Normalize ();
+            }
+          m_lastSelectionRecord.filtered_slot_indexes = oss.str ();
+          m_lastSelectionRecord.valid = true;
+        }
     }
   else
     {
       //no sensing
       nrCandSsResoA = GetNrSupportedList (sfn, candSsResoA);
       NS_LOG_DEBUG ("No sensing: Total slots selected " << nrCandSsResoA.size ());
+      if (m_enableSpsLog)
+        {
+          m_lastSelectionRecord.csrA_after_exclusion = static_cast<uint16_t> (nrCandSsResoA.size ());
+          m_lastSelectionRecord.threshold_iterations = 0;
+          std::ostringstream oss;
+          for (auto it = nrCandSsResoA.begin (); it != nrCandSsResoA.end (); ++it)
+            {
+              if (it != nrCandSsResoA.begin ()) oss << ";";
+              oss << it->sfn.Normalize ();
+            }
+          m_lastSelectionRecord.filtered_slot_indexes = oss.str ();
+          m_lastSelectionRecord.valid = true;
+        }
     }
 
   return nrCandSsResoA;
