@@ -88,7 +88,7 @@ main (int argc, char *argv[])
 
   // Simulation parameters
   double simTime = 60.0;
-  Time slBearersActivationTime = Seconds (2.0);
+  Time slBearersActivationTime = Seconds (0.5);  // activate bearers early so vehicles transmit quickly
 
   // NR parameters — 5.89 GHz band n47, sensing ENABLED for SB-SPS
   double centralFrequencyBandSl = 5.89e9;
@@ -463,6 +463,25 @@ main (int argc, char *argv[])
   EmergencyVehicleAlertHelper.SetAttribute ("MetricSupervisor", PointerValue (metSup));
   EmergencyVehicleAlertHelper.SetAttribute ("SendCPM", BooleanValue (false));
 
+  // --- Progress reporting ---
+  uint32_t totalSelectionEvents = 0;
+  auto progressReporter = [&] () {
+    std::cout << "[t=" << std::fixed << std::setprecision(2) << Simulator::Now ().GetSeconds () << "s] "
+              << nodeCounter << " vehicles active, "
+              << totalSelectionEvents << " SPS selection events logged";
+    if (enableSpsLog)
+      {
+        // Check DB file size
+        struct stat st;
+        std::string dbPath = spsLogDir + "sps_metrics.db";
+        if (stat (dbPath.c_str (), &st) == 0)
+          std::cout << ", DB size: " << st.st_size / 1024 << " KB";
+      }
+    std::cout << std::endl;
+    Simulator::Schedule (Seconds (2.0), [&]() { progressReporter (); });
+  };
+  Simulator::Schedule (Seconds (1.0), [&]() { progressReporter (); });
+
   int i = 0;
   STARTUP_FCN setupNewWifiNode = [&] (std::string vehicleID, TraciClient::StationTypeTraCI_t stationType) -> Ptr<Node>
     {
@@ -471,6 +490,11 @@ main (int argc, char *argv[])
 
       Ptr<Node> includedNode = allSlUesContainer.Get (nodeCounter);
       ++nodeCounter;
+
+      std::cout << "[t=" << std::fixed << std::setprecision(2) << Simulator::Now ().GetSeconds () << "s] "
+                << "++ Vehicle ENTERS: " << vehicleID
+                << " (node " << nodeCounter << "/" << numberOfNodes << ")"
+                << std::endl;
 
       EmergencyVehicleAlertHelper.SetAttribute ("IpAddr", Ipv4AddressValue (groupAddress4));
       i++;
@@ -482,8 +506,11 @@ main (int argc, char *argv[])
       return includedNode;
     };
 
-  SHUTDOWN_FCN shutdownWifiNode = [] (Ptr<Node> exNode, std::string vehicleID)
+  SHUTDOWN_FCN shutdownWifiNode = [&] (Ptr<Node> exNode, std::string vehicleID)
     {
+      std::cout << "[t=" << std::fixed << std::setprecision(2) << Simulator::Now ().GetSeconds () << "s] "
+                << "-- Vehicle LEAVES: " << vehicleID << std::endl;
+
       Ptr<emergencyVehicleAlert> appSample_ = exNode->GetApplication (0)->GetObject<emergencyVehicleAlert> ();
       if (appSample_)
         appSample_->StopApplicationNow ();
@@ -495,8 +522,28 @@ main (int argc, char *argv[])
   sumoClient->SumoSetup (setupNewWifiNode, shutdownWifiNode);
 
   /*** Start Simulation ***/
+  std::cout << "========================================" << std::endl;
+  std::cout << "Starting simulation: " << numberOfNodes << " vehicles, "
+            << simTime << "s, sensing=" << (enableSensing ? "ON" : "OFF")
+            << ", SPS logging=" << (enableSpsLog ? "ON" : "OFF") << std::endl;
+  std::cout << "Bearer activation at t=" << slBearersActivationTime.GetSeconds () << "s" << std::endl;
+  std::cout << "Reservation period: " << reservationPeriod << " ms" << std::endl;
+  std::cout << "========================================" << std::endl;
+
   Simulator::Stop (Seconds (simTime));
   Simulator::Run ();
+
+  std::cout << "========================================" << std::endl;
+  std::cout << "Simulation COMPLETE at t=" << simTime << "s" << std::endl;
+  if (enableSpsLog)
+    {
+      struct stat st;
+      std::string dbPath = spsLogDir + "sps_metrics.db";
+      if (stat (dbPath.c_str (), &st) == 0)
+        std::cout << "SPS metrics DB: " << dbPath << " (" << st.st_size / 1024 << " KB)" << std::endl;
+    }
+  std::cout << "========================================" << std::endl;
+
   Simulator::Destroy ();
 
   if (m_metric_sup)
