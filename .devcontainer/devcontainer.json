@@ -1,0 +1,25 @@
+{
+	"name": "VaN3Twin Dev Environment",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "van3twin",
+	"workspaceFolder": "/workspace",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools",
+				"ms-python.python",
+				"twxs.cmake",
+				"ms-azuretools.vscode-docker"
+			],
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/bin/python3",
+				"terminal.integrated.shell.linux": "/bin/bash"
+			}
+		}
+	},
+	// Ensure we are root to install packages/modify system if needed
+	"remoteUser": "root",
+	"features": {
+		"ghcr.io/devcontainers/features/common-utils:2": {}
+	}
+}

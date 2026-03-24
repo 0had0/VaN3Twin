@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  van3twin:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the repo (parent folder of .devcontainer) to /workspace
+      - ../:/workspace:cached
+    command: sleep infinity
+    networks:
+      - van3twin-net
+    # Keep the container running for VS Code to attach
+    tty: true
+    environment:
+      - SUMO_HOME=/usr/share/sumo
+      - SUMO_HOST=sumo
+      - SUMO_PORT=8813
+
+  sumo:
+    image: savesumocluster/sumo:latest
+    container_name: sumo-server
+    # Mount the same workspace so SUMO can access config files located in the repo
+    volumes:
+      - ../:/workspace:cached
+    ports:
+      - "8813:8813" # TraCI server port
+    networks:
+      - van3twin-net
+    # Keep container alive so you can exec into it or connect remotely
+    command: tail -f /dev/null 
+    # usage: docker exec -it sumo-server sumo -c /workspace/path/to/config.sumocfg --remote-port 8813
+
+networks:
+  van3twin-net:
+    driver: bridge
