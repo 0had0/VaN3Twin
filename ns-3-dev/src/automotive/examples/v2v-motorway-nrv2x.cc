@@ -23,6 +23,7 @@
 #include "ns3/vehicle-visualizer-module.h"
 #include "ns3/MetricSupervisor.h"
 
+#include <functional>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "ns3/core-module.h"
@@ -465,7 +466,7 @@ main (int argc, char *argv[])
 
   // --- Progress reporting ---
   uint32_t totalSelectionEvents = 0;
-  auto progressReporter = [&] () {
+  std::function<void()> progressReporter = [&] () {
     std::cout << "[t=" << std::fixed << std::setprecision(2) << Simulator::Now ().GetSeconds () << "s] "
               << nodeCounter << " vehicles active, "
               << totalSelectionEvents << " SPS selection events logged";
