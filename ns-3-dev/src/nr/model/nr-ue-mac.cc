@@ -2633,7 +2633,7 @@ NrUeMac::WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t se
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_selection_imsi_" + std::to_string(GetImsi()) + ".csv";
+    std::string filename = m_spsLogDir + "sps_selection_imsi_" + std::to_string(m_imsi) + ".csv";
     std::ofstream outFile;
 
     if (m_spsSelectionFirstWrite)
@@ -2690,7 +2690,7 @@ NrUeMac::WriteSensingWindowDump(uint64_t sfnNorm)
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_sensing_imsi_" + std::to_string(GetImsi()) + ".csv";
+    std::string filename = m_spsLogDir + "sps_sensing_imsi_" + std::to_string(m_imsi) + ".csv";
     std::ofstream outFile;
 
     if (m_spsSensingFirstWrite)
@@ -2741,7 +2741,7 @@ NrUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_prng_imsi_" + std::to_string(GetImsi()) + ".csv";
+    std::string filename = m_spsLogDir + "sps_prng_imsi_" + std::to_string(m_imsi) + ".csv";
     std::ofstream outFile;
 
     if (m_spsPrngFirstWrite)
@@ -2783,7 +2783,7 @@ NrUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
 void
 NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
 {
-    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(GetImsi()) + ".csv";
+    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(m_imsi) + ".csv";
     std::ofstream outFile;
 
     if (m_spsDistanceFirstWrite)
@@ -2810,7 +2810,7 @@ NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
 
     // Find this UE's own node and mobility model
     Ptr<MobilityModel> myMobility = nullptr;
-    uint64_t myImsi = GetImsi();
+    uint64_t myImsi = m_imsi;
 
     for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
     {
