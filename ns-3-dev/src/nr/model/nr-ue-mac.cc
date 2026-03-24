@@ -1682,6 +1682,8 @@ NrUeMac::DoNrSlSlotIndication (const SfnSf& sfn)
                       //keeping the resource, reassign the same sidelink resource re-selection
                       //counter we chose while creating the fresh grant
                       itGrantInfo->second.slResoReselCounter = itGrantInfo->second.prevSlResoReselCounter;
+                      // --- SPS logging: resource kept ---
+                      WriteSpsSelectionRow(sfn.Normalize(), true, 0);
                       continue;
                     }
                   else
@@ -1700,7 +1702,15 @@ NrUeMac::DoNrSlSlotIndication (const SfnSf& sfn)
               m_reselCounter = GetRndmReselectionCounter ();
               m_cResel = m_reselCounter * 10;
               NS_LOG_DEBUG ("Resel Counter " << +m_reselCounter << " cResel " << m_cResel);
+              // --- SPS logging: before selection ---
+              WriteSensingWindowDump(sfn.Normalize());
+              WritePrngStateDump(sfn.Normalize(), "before_selection");
+
               std::list <NrSlUeMacSchedSapProvider::NrSlSlotInfo> availbleReso = GetNrSlTxOpportunities (sfn);
+
+              // --- SPS logging: after sensing filter ---
+              WritePrngStateDump(sfn.Normalize(), "after_sensing_filter");
+
               //sensing or not, due to the semi-persistent scheduling, after
               //calling the GetNrSlTxOpportunities method, and before asking the
               //scheduler for resources, we need to remove those available slots,
@@ -1712,9 +1722,22 @@ NrUeMac::DoNrSlSlotIndication (const SfnSf& sfn)
               auto filteredReso = FilterTxOpportunities (availbleReso);
               if (!filteredReso.empty ())
                 {
+                  // --- SPS logging: before/after scheduler ---
+                  WritePrngStateDump(sfn.Normalize(), "before_scheduler");
                   //we ask the scheduler for resources only if the filtered list is not empty.
                   NS_LOG_INFO ("IMSI " << m_imsi << " scheduling the destination " << itDst.first);
                   m_nrSlUeMacSchedSapProvider->SchedUeNrSlTriggerReq (itDst.first, filteredReso);
+                  WritePrngStateDump(sfn.Normalize(), "after_scheduler");
+
+                  // --- SPS logging: selection result & distances ---
+                  uint64_t selectedSlotNorm = 0;
+                  if (!filteredReso.empty())
+                    {
+                      selectedSlotNorm = filteredReso.front().sfn.Normalize();
+                    }
+                  WriteSpsSelectionRow(sfn.Normalize(), false, selectedSlotNorm);
+                  WriteDistanceDump(sfn.Normalize());
+
                   m_reselCounter = 0;
                   m_cResel = 0;
                 }
@@ -2633,7 +2656,7 @@ NrUeMac::WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t se
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_selection_imsi_" + std::to_string(m_imsi) + ".csv";
+    std::string filename = m_spsLogDir + "sps_selection_imsi_" + std::to_string(m_rnti) + ".csv";
     std::ofstream outFile;
 
     if (m_spsSelectionFirstWrite)
@@ -2690,7 +2713,7 @@ NrUeMac::WriteSensingWindowDump(uint64_t sfnNorm)
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_sensing_imsi_" + std::to_string(m_imsi) + ".csv";
+    std::string filename = m_spsLogDir + "sps_sensing_imsi_" + std::to_string(m_rnti) + ".csv";
     std::ofstream outFile;
 
     if (m_spsSensingFirstWrite)
@@ -2741,7 +2764,7 @@ NrUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
         return;
     }
 
-    std::string filename = m_spsLogDir + "sps_prng_imsi_" + std::to_string(m_imsi) + ".csv";
+    std::string filename = m_spsLogDir + "sps_prng_imsi_" + std::to_string(m_rnti) + ".csv";
     std::ofstream outFile;
 
     if (m_spsPrngFirstWrite)
@@ -2783,7 +2806,7 @@ NrUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
 void
 NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
 {
-    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(m_imsi) + ".csv";
+    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(m_rnti) + ".csv";
     std::ofstream outFile;
 
     if (m_spsDistanceFirstWrite)
