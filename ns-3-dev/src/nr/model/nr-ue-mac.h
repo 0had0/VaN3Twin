@@ -1124,8 +1124,8 @@ private:
    */
   TracedCallback<uint64_t, uint16_t, uint16_t, uint8_t, uint32_t, double> m_rxRlcPduWithTxRnti;
 
-    // --- SB-SPS selection logging ---
-    /// Record of SB-SPS selection internals for per-vehicle CSV export
+    // --- SB-SPS selection logging (SQLite) ---
+    /// Record of SB-SPS selection internals
     struct SpsSelectionRecord
     {
         int64_t timestamp_ms{0};
@@ -1139,18 +1139,27 @@ private:
         bool valid{false};
     };
 
-    bool m_enableSpsLog{false};             //!< Toggle SPS selection CSV logging
-    std::string m_spsLogDir;                //!< Directory prefix for SPS log files
-    bool m_spsSelectionFirstWrite{true};    //!< Header tracking for selection CSV
-    bool m_spsSensingFirstWrite{true};      //!< Header tracking for sensing CSV
-    bool m_spsPrngFirstWrite{true};         //!< Header tracking for PRNG CSV
-    bool m_spsDistanceFirstWrite{true};     //!< First write flag for distance CSV header
-    SpsSelectionRecord m_lastSelectionRecord; //!< Last selection record from GetNrSlTxOpportunities
+    // --- Granular log toggles ---
+    bool m_enableSpsLog{false};             //!< Master toggle
+    bool m_enableSelectionLog{true};        //!< Log selection table
+    bool m_enableSensingLog{true};          //!< Log sensing table
+    bool m_enablePrngLog{true};             //!< Log PRNG state table
+    bool m_enableDistanceLog{true};         //!< Log distance table
+    double m_distanceLogMaxRange{500.0};    //!< Only log distances within range (m)
+    std::string m_spsLogDir;                //!< Directory for the DB file
 
+    // --- SQLite members ---
+    void* m_spsDb{nullptr};                 //!< SQLiteOutput* (void to avoid header dep)
+    bool m_spsDbInitialized{false};
+
+    SpsSelectionRecord m_lastSelectionRecord;
+
+    void InitSpsDb();                       //!< Create/open the DB and tables
     void WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t selectedSlotNorm);
     void WriteSensingWindowDump(uint64_t sfnNorm);
     void WritePrngStateDump(uint64_t sfnNorm, const std::string& event);
     void WriteDistanceDump(uint64_t sfnNorm);
+    void FlushSpsDb();                      //!< Flush pending caches
 };
 
 }

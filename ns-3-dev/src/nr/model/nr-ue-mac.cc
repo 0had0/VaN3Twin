@@ -48,10 +48,10 @@
 #include <ns3/node.h>
 #include <ns3/mobility-model.h>
 #include <ns3/nr-ue-net-device.h>
+#include <ns3/sqlite-output.h>
 
 #include <algorithm>
 #include <bitset>
-#include <fstream>
 #include <sstream>
 #include <iomanip>
 
@@ -379,15 +379,40 @@ NrUeMac::GetTypeId (void)
                                           &NrUeMac::GetResourcePercentage),
                     MakeUintegerChecker<uint8_t> (1, 100))
     .AddAttribute("EnableSpsSelectionLog",
-                  "If true, write per-vehicle SPS selection CSV files",
+                  "Master toggle: write per-vehicle SPS metrics to SQLite DB",
                   BooleanValue(false),
                   MakeBooleanAccessor(&NrUeMac::m_enableSpsLog),
                   MakeBooleanChecker())
     .AddAttribute("SpsSelectionLogDir",
-                  "Directory prefix for SPS selection log files",
+                  "Directory for the SPS SQLite database file",
                   StringValue(""),
                   MakeStringAccessor(&NrUeMac::m_spsLogDir),
                   MakeStringChecker())
+    .AddAttribute("EnableSpsSelectionTable",
+                  "Log the selection table in the SPS DB",
+                  BooleanValue(true),
+                  MakeBooleanAccessor(&NrUeMac::m_enableSelectionLog),
+                  MakeBooleanChecker())
+    .AddAttribute("EnableSpsSensingTable",
+                  "Log the sensing window table in the SPS DB",
+                  BooleanValue(true),
+                  MakeBooleanAccessor(&NrUeMac::m_enableSensingLog),
+                  MakeBooleanChecker())
+    .AddAttribute("EnableSpsPrngTable",
+                  "Log the PRNG state table in the SPS DB",
+                  BooleanValue(true),
+                  MakeBooleanAccessor(&NrUeMac::m_enablePrngLog),
+                  MakeBooleanChecker())
+    .AddAttribute("EnableSpsDistanceTable",
+                  "Log the inter-vehicle distance table in the SPS DB",
+                  BooleanValue(true),
+                  MakeBooleanAccessor(&NrUeMac::m_enableDistanceLog),
+                  MakeBooleanChecker())
+    .AddAttribute("SpsDistanceMaxRange",
+                  "Only log distances within this range (meters)",
+                  DoubleValue(500.0),
+                  MakeDoubleAccessor(&NrUeMac::m_distanceLogMaxRange),
+                  MakeDoubleChecker<double>(0.0))
     .AddTraceSource ("SlPscchScheduling",
                      "Information regarding NR SL PSCCH UE scheduling",
                      MakeTraceSourceAccessor (&NrUeMac::m_slPscchScheduling),
@@ -2704,191 +2729,210 @@ NrUeMac::FireTraceSlRlcRxPduWithTxRnti (const Ptr<Packet> p, uint8_t lcid)
 // --- SB-SPS selection logging methods ---
 
 void
-NrUeMac::WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t selectedSlotNorm)
+NrUeMac::InitSpsDb()
 {
-    if (!m_enableSpsLog)
+    if (m_spsDbInitialized || !m_enableSpsLog)
     {
         return;
     }
+    m_spsDbInitialized = true;
 
-    std::string filename = m_spsLogDir + "sps_selection_imsi_" + std::to_string(m_rnti) + ".csv";
-    std::ofstream outFile;
+    std::string dbPath = m_spsLogDir + "sps_metrics.db";
+    auto* db = new SQLiteOutput(dbPath);
+    db->SetJournalInMemory(); // WAL in memory — faster, acceptable since sim crash = redo anyway
+    m_spsDb = static_cast<void*>(db);
 
-    if (m_spsSelectionFirstWrite)
+    // Create tables
+    if (m_enableSelectionLog)
     {
-        outFile.open(filename.c_str());
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-        m_spsSelectionFirstWrite = false;
-        outFile << "timestamp_ms\tsfn_normalized\tresource_reused\tcsr_a_total\t"
-                   "csr_a_after_exclusion\tthreshold_iterations\tfinal_threshold_dBm\t"
-                   "sensing_window_size\tselected_slot_norm\tfiltered_slot_indexes"
-                << std::endl;
+        db->SpinExec("CREATE TABLE IF NOT EXISTS selection ("
+                     "timestamp_ms INTEGER, "
+                     "sfn_normalized INTEGER, "
+                     "rnti INTEGER, "
+                     "resource_reused INTEGER, "
+                     "csr_a_total INTEGER, "
+                     "csr_a_after_exclusion INTEGER, "
+                     "threshold_iterations INTEGER, "
+                     "final_threshold_dBm INTEGER, "
+                     "sensing_window_size INTEGER, "
+                     "selected_slot_norm INTEGER, "
+                     "filtered_slot_indexes TEXT"
+                     ");");
     }
-    else
+    if (m_enableSensingLog)
     {
-        outFile.open(filename.c_str(), std::ios_base::app);
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
+        db->SpinExec("CREATE TABLE IF NOT EXISTS sensing ("
+                     "dump_timestamp_ms INTEGER, "
+                     "dump_sfn_norm INTEGER, "
+                     "rnti INTEGER, "
+                     "sensed_sfn_norm INTEGER, "
+                     "sensed_sbch_start INTEGER, "
+                     "sensed_sbch_length INTEGER, "
+                     "sensed_rsrp REAL, "
+                     "sensed_prio INTEGER, "
+                     "sensed_rsvp_ms INTEGER"
+                     ");");
+    }
+    if (m_enablePrngLog)
+    {
+        db->SpinExec("CREATE TABLE IF NOT EXISTS prng ("
+                     "timestamp_ms INTEGER, "
+                     "sfn_normalized INTEGER, "
+                     "rnti INTEGER, "
+                     "event TEXT, "
+                     "state_0 REAL, "
+                     "state_1 REAL, "
+                     "state_2 REAL, "
+                     "state_3 REAL, "
+                     "state_4 REAL, "
+                     "state_5 REAL"
+                     ");");
+    }
+    if (m_enableDistanceLog)
+    {
+        db->SpinExec("CREATE TABLE IF NOT EXISTS distances ("
+                     "timestamp_ms INTEGER, "
+                     "sfn_normalized INTEGER, "
+                     "source_rnti INTEGER, "
+                     "target_node_id INTEGER, "
+                     "target_rnti INTEGER, "
+                     "distance_m REAL"
+                     ");");
     }
 
-    outFile << Simulator::Now().GetMilliSeconds() << "\t"
-            << sfnNorm << "\t"
-            << (resourceReused ? 1 : 0) << "\t";
+    NS_LOG_INFO("SPS metrics DB opened at " << dbPath);
+}
+
+void
+NrUeMac::FlushSpsDb()
+{
+    // No-op for now — writes are immediate via transactions
+}
+
+void
+NrUeMac::WriteSpsSelectionRow(uint64_t sfnNorm, bool resourceReused, uint64_t selectedSlotNorm)
+{
+    if (!m_enableSpsLog || !m_enableSelectionLog)
+    {
+        return;
+    }
+    InitSpsDb();
+    auto* db = static_cast<SQLiteOutput*>(m_spsDb);
+    if (!db) return;
+
+    sqlite3_stmt* stmt;
+    db->SpinPrepare(&stmt,
+        "INSERT INTO selection VALUES (?,?,?,?,?,?,?,?,?,?,?);");
+
+    int64_t nowMs = Simulator::Now().GetMilliSeconds();
+    db->Bind(stmt, 1, static_cast<uint32_t>(nowMs));
+    db->Bind(stmt, 2, static_cast<uint32_t>(sfnNorm));
+    db->Bind(stmt, 3, static_cast<uint32_t>(m_rnti));
+    db->Bind(stmt, 4, static_cast<uint32_t>(resourceReused ? 1 : 0));
 
     if (m_lastSelectionRecord.valid)
     {
-        outFile << m_lastSelectionRecord.csrA_total << "\t"
-                << m_lastSelectionRecord.csrA_after_exclusion << "\t"
-                << (uint32_t)m_lastSelectionRecord.threshold_iterations << "\t"
-                << m_lastSelectionRecord.final_threshold_dBm << "\t"
-                << m_lastSelectionRecord.sensing_window_size << "\t"
-                << selectedSlotNorm << "\t"
-                << m_lastSelectionRecord.filtered_slot_indexes;
+        db->Bind(stmt, 5, static_cast<uint32_t>(m_lastSelectionRecord.csrA_total));
+        db->Bind(stmt, 6, static_cast<uint32_t>(m_lastSelectionRecord.csrA_after_exclusion));
+        db->Bind(stmt, 7, static_cast<uint32_t>(m_lastSelectionRecord.threshold_iterations));
+        db->Bind(stmt, 8, static_cast<int>(m_lastSelectionRecord.final_threshold_dBm));
+        db->Bind(stmt, 9, static_cast<uint32_t>(m_lastSelectionRecord.sensing_window_size));
+        db->Bind(stmt, 10, static_cast<uint32_t>(selectedSlotNorm));
+        db->Bind(stmt, 11, m_lastSelectionRecord.filtered_slot_indexes);
     }
     else
     {
-        outFile << "0\t0\t0\t0\t0\t" << selectedSlotNorm << "\t";
+        db->Bind(stmt, 5, static_cast<uint32_t>(0));
+        db->Bind(stmt, 6, static_cast<uint32_t>(0));
+        db->Bind(stmt, 7, static_cast<uint32_t>(0));
+        db->Bind(stmt, 8, static_cast<int>(0));
+        db->Bind(stmt, 9, static_cast<uint32_t>(0));
+        db->Bind(stmt, 10, static_cast<uint32_t>(selectedSlotNorm));
+        db->Bind(stmt, 11, std::string(""));
     }
-    outFile << std::endl;
-    outFile.close();
+    db->SpinStep(stmt);
+    db->SpinFinalize(stmt);
 }
 
 void
 NrUeMac::WriteSensingWindowDump(uint64_t sfnNorm)
 {
-    if (!m_enableSpsLog)
+    if (!m_enableSpsLog || !m_enableSensingLog)
     {
         return;
     }
-
-    std::string filename = m_spsLogDir + "sps_sensing_imsi_" + std::to_string(m_rnti) + ".csv";
-    std::ofstream outFile;
-
-    if (m_spsSensingFirstWrite)
-    {
-        outFile.open(filename.c_str());
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-        m_spsSensingFirstWrite = false;
-        outFile << "dump_timestamp_ms\tdump_sfn_norm\tsensed_sfn_norm\t"
-                   "sensed_sbch_start\tsensed_sbch_length\tsensed_rsrp\t"
-                   "sensed_prio\tsensed_rsvp_ms"
-                << std::endl;
-    }
-    else
-    {
-        outFile.open(filename.c_str(), std::ios_base::app);
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-    }
+    InitSpsDb();
+    auto* db = static_cast<SQLiteOutput*>(m_spsDb);
+    if (!db) return;
 
     int64_t nowMs = Simulator::Now().GetMilliSeconds();
+
+    db->SpinExec("BEGIN TRANSACTION;");
     for (const auto& sd : m_sensingData)
     {
-        outFile << nowMs << "\t"
-                << sfnNorm << "\t"
-                << sd.sfn.Normalize() << "\t"
-                << (uint32_t)sd.sbChStart << "\t"
-                << (uint32_t)sd.sbChLength << "\t"
-                << sd.slRsrp << "\t"
-                << (uint32_t)sd.prio << "\t"
-                << sd.rsvp
-                << std::endl;
+        sqlite3_stmt* stmt;
+        db->SpinPrepare(&stmt,
+            "INSERT INTO sensing VALUES (?,?,?,?,?,?,?,?,?);");
+        db->Bind(stmt, 1, static_cast<uint32_t>(nowMs));
+        db->Bind(stmt, 2, static_cast<uint32_t>(sfnNorm));
+        db->Bind(stmt, 3, static_cast<uint32_t>(m_rnti));
+        db->Bind(stmt, 4, static_cast<uint32_t>(sd.sfn.Normalize()));
+        db->Bind(stmt, 5, static_cast<uint32_t>(sd.sbChStart));
+        db->Bind(stmt, 6, static_cast<uint32_t>(sd.sbChLength));
+        db->Bind(stmt, 7, static_cast<double>(sd.slRsrp));
+        db->Bind(stmt, 8, static_cast<uint32_t>(sd.prio));
+        db->Bind(stmt, 9, static_cast<uint32_t>(sd.rsvp));
+        db->SpinStep(stmt);
+        db->SpinFinalize(stmt);
     }
-    outFile.close();
+    db->SpinExec("COMMIT TRANSACTION;");
 }
 
 void
 NrUeMac::WritePrngStateDump(uint64_t sfnNorm, const std::string& event)
 {
-    if (!m_enableSpsLog)
+    if (!m_enableSpsLog || !m_enablePrngLog)
     {
         return;
     }
-
-    std::string filename = m_spsLogDir + "sps_prng_imsi_" + std::to_string(m_rnti) + ".csv";
-    std::ofstream outFile;
-
-    if (m_spsPrngFirstWrite)
-    {
-        outFile.open(filename.c_str());
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-        m_spsPrngFirstWrite = false;
-        outFile << "timestamp_ms\tsfn_normalized\tevent\t"
-                   "state_0\tstate_1\tstate_2\tstate_3\tstate_4\tstate_5"
-                << std::endl;
-    }
-    else
-    {
-        outFile.open(filename.c_str(), std::ios_base::app);
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-    }
+    InitSpsDb();
+    auto* db = static_cast<SQLiteOutput*>(m_spsDb);
+    if (!db) return;
 
     double state[6];
     m_ueSelectedUniformVariable->GetRngState(state);
 
-    outFile << Simulator::Now().GetMilliSeconds() << "\t"
-            << sfnNorm << "\t"
-            << event << "\t"
-            << std::setprecision(15)
-            << state[0] << "\t" << state[1] << "\t" << state[2] << "\t"
-            << state[3] << "\t" << state[4] << "\t" << state[5]
-            << std::endl;
-    outFile.close();
+    sqlite3_stmt* stmt;
+    db->SpinPrepare(&stmt,
+        "INSERT INTO prng VALUES (?,?,?,?,?,?,?,?,?,?);");
+    db->Bind(stmt, 1, static_cast<uint32_t>(Simulator::Now().GetMilliSeconds()));
+    db->Bind(stmt, 2, static_cast<uint32_t>(sfnNorm));
+    db->Bind(stmt, 3, static_cast<uint32_t>(m_rnti));
+    db->Bind(stmt, 4, event);
+    db->Bind(stmt, 5, state[0]);
+    db->Bind(stmt, 6, state[1]);
+    db->Bind(stmt, 7, state[2]);
+    db->Bind(stmt, 8, state[3]);
+    db->Bind(stmt, 9, state[4]);
+    db->Bind(stmt, 10, state[5]);
+    db->SpinStep(stmt);
+    db->SpinFinalize(stmt);
 }
 
 void
 NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
 {
-    std::string filename = m_spsLogDir + "sps_distances_imsi_" + std::to_string(m_rnti) + ".csv";
-    std::ofstream outFile;
-
-    if (m_spsDistanceFirstWrite)
+    if (!m_enableSpsLog || !m_enableDistanceLog)
     {
-        m_spsDistanceFirstWrite = false;
-        outFile.open(filename.c_str(), std::ios_base::out);
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-        outFile << "timestamp_ms,sfn_normalized,source_imsi,target_node_id,target_imsi,distance_m"
-                << std::endl;
+        return;
     }
-    else
-    {
-        outFile.open(filename.c_str(), std::ios_base::app);
-        if (!outFile.is_open())
-        {
-            NS_LOG_ERROR("Cannot open " << filename);
-            return;
-        }
-    }
+    InitSpsDb();
+    auto* db = static_cast<SQLiteOutput*>(m_spsDb);
+    if (!db) return;
 
-    // Find this UE's own node and mobility model
+    // Find this UE's own node and mobility model via IMSI
     Ptr<MobilityModel> myMobility = nullptr;
-    uint64_t myImsi = m_imsi;
+    Ptr<Node> myNode = nullptr;
 
     for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
     {
@@ -2896,9 +2940,10 @@ NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
         for (uint32_t d = 0; d < node->GetNDevices(); ++d)
         {
             Ptr<NrUeNetDevice> nrDev = DynamicCast<NrUeNetDevice>(node->GetDevice(d));
-            if (nrDev && nrDev->GetImsi() == myImsi)
+            if (nrDev && nrDev->GetImsi() == m_imsi)
             {
                 myMobility = node->GetObject<MobilityModel>();
+                myNode = node;
                 break;
             }
         }
@@ -2906,51 +2951,84 @@ NrUeMac::WriteDistanceDump(uint64_t sfnNorm)
             break;
     }
 
+    // Fallback: if IMSI didn't work (always 0), match by node with NR device
+    // by checking all NR devices until we find one whose MAC rnti matches
     if (!myMobility)
     {
-        NS_LOG_WARN("Could not find MobilityModel for IMSI " << myImsi);
-        outFile.close();
+        for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
+        {
+            Ptr<Node> node = *nit;
+            Ptr<MobilityModel> mob = node->GetObject<MobilityModel>();
+            if (!mob) continue;
+            for (uint32_t d = 0; d < node->GetNDevices(); ++d)
+            {
+                Ptr<NrUeNetDevice> nrDev = DynamicCast<NrUeNetDevice>(node->GetDevice(d));
+                if (nrDev)
+                {
+                    // Compare pointer: if this device's MAC is us
+                    if (nrDev->GetMac(0).operator->() == this)
+                    {
+                        myMobility = mob;
+                        myNode = node;
+                        break;
+                    }
+                }
+            }
+            if (myMobility) break;
+        }
+    }
+
+    if (!myMobility)
+    {
+        NS_LOG_WARN("Could not find MobilityModel for RNTI " << m_rnti);
         return;
     }
 
     int64_t nowMs = Simulator::Now().GetMilliSeconds();
 
-    // Iterate all other nodes and compute distances
+    db->SpinExec("BEGIN TRANSACTION;");
     for (auto nit = NodeList::Begin(); nit != NodeList::End(); ++nit)
     {
         Ptr<Node> otherNode = *nit;
+        if (otherNode == myNode)
+            continue; // skip self
+
         Ptr<MobilityModel> otherMobility = otherNode->GetObject<MobilityModel>();
         if (!otherMobility)
             continue;
 
-        // Find IMSI of the other node (if it has an NR device)
-        uint64_t otherImsi = 0;
+        double distance = myMobility->GetDistanceFrom(otherMobility);
+
+        // Skip beyond range
+        if (distance > m_distanceLogMaxRange)
+            continue;
+
+        // Find RNTI of the other node via its NR device's IMSI (RNTI ≈ IMSI in this scenario)
+        uint16_t otherRnti = 0;
         for (uint32_t d = 0; d < otherNode->GetNDevices(); ++d)
         {
             Ptr<NrUeNetDevice> nrDev = DynamicCast<NrUeNetDevice>(otherNode->GetDevice(d));
             if (nrDev)
             {
-                otherImsi = nrDev->GetImsi();
+                // Use IMSI as identifier (IMSI = RNTI in sidelink scenarios)
+                otherRnti = static_cast<uint16_t>(nrDev->GetImsi());
                 break;
             }
         }
 
-        // Skip self
-        if (otherImsi == myImsi)
-            continue;
-
-        double distance = myMobility->GetDistanceFrom(otherMobility);
-
-        outFile << nowMs << ","
-                << sfnNorm << ","
-                << myImsi << ","
-                << otherNode->GetId() << ","
-                << otherImsi << ","
-                << std::setprecision(6) << distance
-                << std::endl;
+        sqlite3_stmt* stmt;
+        db->SpinPrepare(&stmt,
+            "INSERT INTO distances VALUES (?,?,?,?,?,?);");
+        db->Bind(stmt, 1, static_cast<uint32_t>(nowMs));
+        db->Bind(stmt, 2, static_cast<uint32_t>(sfnNorm));
+        db->Bind(stmt, 3, static_cast<uint32_t>(m_rnti));
+        db->Bind(stmt, 4, static_cast<uint32_t>(otherNode->GetId()));
+        db->Bind(stmt, 5, static_cast<uint32_t>(otherRnti));
+        db->Bind(stmt, 6, distance);
+        db->SpinStep(stmt);
+        db->SpinFinalize(stmt);
     }
-
-    outFile.close();
+    db->SpinExec("COMMIT TRANSACTION;");
 }
 
 }
