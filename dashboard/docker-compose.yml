@@ -1,0 +1,37 @@
+services:
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    container_name: sps-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=frser-sqlite-datasource
+      - GF_SECURITY_ADMIN_PASSWORD=sps
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_PANELS_DISABLE_SANITIZE_HTML=true
+      - GF_PLUGIN_FRSER_SQLITE_DATASOURCE_ALLOW_LOCAL_MODE=true
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/sps-dashboard.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ${SPS_DB_PATH:-./sps_logs}:/data/sps:ro
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - spectrogram
+    restart: unless-stopped
+
+  spectrogram:
+    build: ./spectrogram
+    container_name: sps-spectrogram
+    ports:
+      - "8050:8050"
+    volumes:
+      - ${SPS_DB_PATH:-./sps_logs}:/data/sps:ro
+    environment:
+      - DB_PATH=/data/sps/sps_metrics.db
+    restart: unless-stopped
+
+volumes:
+  grafana-storage:

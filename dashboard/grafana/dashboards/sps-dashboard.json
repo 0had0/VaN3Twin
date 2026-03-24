@@ -1,0 +1,288 @@
+{
+  "uid": "sps-sensing-dashboard",
+  "title": "SPS Sensing & Selection Metrics",
+  "description": "NR V2X Mode 2 SB-SPS per-vehicle resource selection analysis",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": ["sps", "nr-v2x", "sensing"],
+  "templating": {
+    "list": [
+      {
+        "name": "rnti",
+        "type": "query",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+        "definition": "SELECT DISTINCT rnti FROM selection ORDER BY rnti",
+        "query": "SELECT DISTINCT rnti FROM selection ORDER BY rnti",
+        "current": { "text": "1", "value": "1" },
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "sort": 3,
+        "label": "Vehicle RNTI"
+      },
+      {
+        "name": "slot_ms",
+        "type": "custom",
+        "query": "0.25",
+        "current": { "text": "0.25", "value": "0.25" },
+        "label": "Slot Duration (ms)",
+        "hide": 0
+      },
+      {
+        "name": "base_epoch",
+        "type": "constant",
+        "query": "1704067200000",
+        "current": { "text": "1704067200000", "value": "1704067200000" },
+        "hide": 2
+      }
+    ]
+  },
+  "time": {
+    "from": "2024-01-01T00:00:00.000Z",
+    "to": "2024-01-01T00:01:00.000Z"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s"],
+    "time_options": ["5m", "15m", "1h"]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "+3dB Threshold Relaxation",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+        "enable": true,
+        "iconColor": "#FFEB3B",
+        "rawQuery": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, 'Threshold +3dB x' || threshold_iterations || ' (final=' || final_threshold_dBm || ' dBm, L_a=' || csr_a_after_exclusion || '/' || csr_a_total || ')' as text, 'threshold' as tags FROM selection WHERE rnti = ${rnti} AND threshold_iterations > 0 ORDER BY sfn_normalized"
+      },
+      {
+        "name": "Resource Keep Events",
+        "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+        "enable": false,
+        "iconColor": "#4CAF50",
+        "rawQuery": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, 'Resource Kept' as text FROM selection WHERE rnti = ${rnti} AND resource_reused = 1 ORDER BY sfn_normalized"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Sensing Spectrogram (Freq x Time)",
+      "gridPos": { "h": 16, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "html",
+        "content": "<iframe src=\"http://localhost:8050/?rnti=${rnti}\" style=\"width:100%;height:100%;border:none;\" sandbox=\"allow-scripts allow-same-origin\"></iframe>"
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "RSRP Threshold Evolution",
+      "description": "Shows the final RSRP threshold applied at each selection event. Steps indicate +3dB relaxation.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, final_threshold_dBm as value, 'Threshold (dBm)' as metric FROM selection WHERE rnti = ${rnti} AND resource_reused = 0 ORDER BY sfn_normalized",
+          "queryType": "time series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "always",
+            "stacking": { "mode": "none" }
+          },
+          "unit": "dBm"
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list" }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Candidate Resources: CSR-A Total vs L_a",
+      "description": "Total candidate resources (CSR-A) vs remaining after RSRP exclusion (L_a).",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, csr_a_total as value, 'CSR-A Total' as metric FROM selection WHERE rnti = ${rnti} AND resource_reused = 0 ORDER BY sfn_normalized",
+          "queryType": "time series"
+        },
+        {
+          "rawQueryText": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, csr_a_after_exclusion as value, 'L_a (after exclusion)' as metric FROM selection WHERE rnti = ${rnti} AND resource_reused = 0 ORDER BY sfn_normalized",
+          "queryType": "time series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "pointSize": 3,
+            "showPoints": "always",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "CSR-A Total" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#3498db", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "L_a (after exclusion)" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#e74c3c", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Distance to Neighbors",
+      "description": "Distance (m) from selected vehicle to nearby vehicles at each selection event.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT CAST(sfn_normalized * ${slot_ms} + ${base_epoch} AS INTEGER) as time, distance_m as value, 'RNTI ' || target_rnti as metric FROM distances WHERE source_rnti = ${rnti} ORDER BY sfn_normalized",
+          "queryType": "time series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "lengthm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "pointSize": 2,
+            "showPoints": "never",
+            "fillOpacity": 0
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "right" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Selection Events Detail",
+      "description": "Detailed log of each SB-SPS selection or resource keep decision.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT timestamp_ms as 'Time (ms)', sfn_normalized as 'SFN', CASE WHEN resource_reused = 1 THEN 'KEEP' ELSE 'NEW' END as 'Decision', csr_a_total as 'CSR-A', csr_a_after_exclusion as 'L_a', threshold_iterations as '+3dB Steps', final_threshold_dBm as 'Threshold', sensing_window_size as 'Sensing Buf', selected_slot_norm as 'Selected Slot' FROM selection WHERE rnti = ${rnti} ORDER BY sfn_normalized DESC LIMIT 200",
+          "queryType": "table"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Decision" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "KEEP": { "color": "green", "text": "KEEP" }, "NEW": { "color": "orange", "text": "NEW" } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "+3dB Steps" },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": { "mode": "absolute", "steps": [{ "value": null, "color": "green" }, { "value": 1, "color": "yellow" }, { "value": 3, "color": "red" }] }
+              },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "SFN", "desc": true }]
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Selection Summary",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT COUNT(*) as value, 'Total Events' as metric FROM selection WHERE rnti = ${rnti}",
+          "queryType": "table"
+        }
+      ],
+      "options": { "graphMode": "none", "textMode": "value_and_name" }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Keep Ratio",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 32 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT ROUND(100.0 * SUM(resource_reused) / COUNT(*), 1) as value, '% Kept' as metric FROM selection WHERE rnti = ${rnti}",
+          "queryType": "table"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "options": { "graphMode": "none", "textMode": "value_and_name" }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Avg +3dB Relaxations",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 32 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT ROUND(AVG(threshold_iterations), 2) as value, 'Avg +3dB Steps' as metric FROM selection WHERE rnti = ${rnti} AND resource_reused = 0",
+          "queryType": "table"
+        }
+      ],
+      "options": { "graphMode": "none", "textMode": "value_and_name" }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Avg L_a / CSR-A",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 32 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "sps-sqlite" },
+      "targets": [
+        {
+          "rawQueryText": "SELECT ROUND(100.0 * AVG(CAST(csr_a_after_exclusion AS REAL) / NULLIF(csr_a_total, 0)), 1) as value, '% Resources Available' as metric FROM selection WHERE rnti = ${rnti} AND resource_reused = 0 AND csr_a_total > 0",
+          "queryType": "table"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "options": { "graphMode": "none", "textMode": "value_and_name" }
+    }
+  ]
+}

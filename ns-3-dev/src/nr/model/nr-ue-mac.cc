@@ -2800,6 +2800,13 @@ NrUeMac::InitSpsDb()
                      ");");
     }
 
+    // Create indexes for dashboard query performance
+    db->SpinExec("CREATE INDEX IF NOT EXISTS idx_selection_rnti ON selection(rnti, sfn_normalized);");
+    db->SpinExec("CREATE INDEX IF NOT EXISTS idx_sensing_rnti ON sensing(rnti, sensed_sfn_norm);");
+    db->SpinExec("CREATE INDEX IF NOT EXISTS idx_sensing_dump ON sensing(rnti, dump_sfn_norm);");
+    db->SpinExec("CREATE INDEX IF NOT EXISTS idx_prng_rnti ON prng(rnti, sfn_normalized);");
+    db->SpinExec("CREATE INDEX IF NOT EXISTS idx_distances_rnti ON distances(source_rnti, timestamp_ms);");
+
     NS_LOG_INFO("SPS metrics DB opened at " << dbPath);
 }
 

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SPS Sensing Spectrogram</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 20px;
+            background: #16213e;
+            border-bottom: 1px solid #0f3460;
+            flex-wrap: wrap;
+        }
+        .controls label {
+            font-size: 13px;
+            color: #a0a0c0;
+        }
+        .controls select, .controls input {
+            background: #0f3460;
+            color: #e0e0e0;
+            border: 1px solid #533483;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .controls button {
+            background: #533483;
+            color: white;
+            border: none;
+            padding: 7px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .controls button:hover { background: #6a44a0; }
+        .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .status {
+            font-size: 12px;
+            color: #888;
+            margin-left: auto;
+        }
+        #heatmap { width: 100%; height: calc(100vh - 52px); }
+        .legend-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            font-size: 12px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <label>Vehicle RNTI:</label>
+        <select id="rntiSelect"></select>
+
+        <label>Threshold (dBm):</label>
+        <input type="number" id="thresholdInput" value="-128" step="3" style="width:80px">
+
+        <button id="loadBtn" onclick="loadData()">Load</button>
+        <button id="showAllBtn" onclick="loadAllVehicles()">Show All</button>
+
+        <div class="legend-bar">
+            <div class="legend-item">
+                <div class="legend-dot" style="background:#2ecc71"></div> Below threshold
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background:#e67e22"></div> Near threshold
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background:#e74c3c"></div> Above threshold
+            </div>
+            <div class="legend-item">
+                <div class="legend-dot" style="background:rgba(255,255,0,0.5); border: 1px solid #ff0"></div> +3dB event
+            </div>
+        </div>
+
+        <span class="status" id="status">Ready</span>
+    </div>
+
+    <div id="heatmap"></div>
+
+    <script>
+    const API = '';  // same origin
+    let simConfig = {};
+
+    // Custom colorscale: green (available) -> yellow -> red (blocked)
+    const COLORSCALE = [
+        [0,    '#1a5276'],  // very low RSRP (deep blue - no signal)
+        [0.2,  '#2ecc71'],  // low RSRP (green - available)
+        [0.5,  '#f1c40f'],  // medium RSRP (yellow - marginal)
+        [0.7,  '#e67e22'],  // high RSRP (orange - risky)
+        [1.0,  '#e74c3c'],  // very high RSRP (red - will be excluded)
+    ];
+
+    async function init() {
+        // Load config
+        const cfgResp = await fetch(`${API}/api/config`);
+        simConfig = await cfgResp.json();
+
+        // Load RNTI list
+        const rntiResp = await fetch(`${API}/api/rnti-list`);
+        const rntiData = await rntiResp.json();
+        const sel = document.getElementById('rntiSelect');
+        rntiData.rntis.forEach(r => {
+            const opt = document.createElement('option');
+            opt.value = r;
+            opt.textContent = `RNTI ${r} (veh${r})`;
+            sel.appendChild(opt);
+        });
+
+        // Pre-select from URL param or first
+        const urlRnti = new URLSearchParams(window.location.search).get('rnti');
+        if (urlRnti) sel.value = urlRnti;
+
+        // Initial empty plot
+        Plotly.newPlot('heatmap', [], getLayout('Select a vehicle and click Load'), getPlotConfig());
+
+        // Auto-load if RNTI specified
+        if (urlRnti || rntiData.rntis.length > 0) {
+            loadData();
+        }
+    }
+
+    function getLayout(title) {
+        return {
+            title: { text: title || 'SPS Sensing Spectrogram', font: { color: '#e0e0e0', size: 16 } },
+            paper_bgcolor: '#1a1a2e',
+            plot_bgcolor: '#16213e',
+            xaxis: {
+                title: { text: 'Slot Number (SFN)', font: { color: '#a0a0c0' } },
+                color: '#a0a0c0',
+                gridcolor: '#2a2a4e',
+            },
+            yaxis: {
+                title: { text: 'Subchannel Index', font: { color: '#a0a0c0' } },
+                color: '#a0a0c0',
+                gridcolor: '#2a2a4e',
+                dtick: 1,
+            },
+            margin: { l: 60, r: 20, t: 40, b: 50 },
+            shapes: [],  // will be populated with +3dB event lines
+        };
+    }
+
+    function getPlotConfig() {
+        return {
+            responsive: true,
+            displayModeBar: true,
+            modeBarButtonsToAdd: ['select2d', 'lasso2d'],
+            scrollZoom: true,
+        };
+    }
+
+    async function loadData() {
+        const rnti = document.getElementById('rntiSelect').value;
+        if (!rnti) return;
+
+        setStatus('Loading sensing data...');
+        document.getElementById('loadBtn').disabled = true;
+
+        try {
+            // Fetch heatmap data and selection events in parallel
+            const [heatResp, selResp] = await Promise.all([
+                fetch(`${API}/api/heatmap-data?rnti=${rnti}`),
+                fetch(`${API}/api/selection-events?rnti=${rnti}`),
+            ]);
+            const heatData = await heatResp.json();
+            const selData = await selResp.json();
+
+            renderHeatmap(rnti, heatData, selData);
+            setStatus(`Loaded ${heatData.count} sensing points, ${selData.count} selection events`);
+        } catch (err) {
+            setStatus(`Error: ${err.message}`);
+        } finally {
+            document.getElementById('loadBtn').disabled = false;
+        }
+    }
+
+    function renderHeatmap(rnti, heatData, selData) {
+        const threshold = parseFloat(document.getElementById('thresholdInput').value);
+        const points = heatData.data;
+
+        if (points.length === 0) {
+            Plotly.react('heatmap', [], getLayout(`RNTI ${rnti}: No sensing data`), getPlotConfig());
+            return;
+        }
+
+        // Build sparse heatmap: collect unique SFNs and subchannels
+        const sfnSet = new Set();
+        const schSet = new Set();
+        const dataMap = new Map(); // "sfn,sch" -> rsrp
+
+        points.forEach(p => {
+            sfnSet.add(p.sfn);
+            schSet.add(p.subchannel);
+            dataMap.set(`${p.sfn},${p.subchannel}`, p.rsrp);
+        });
+
+        const sfns = Array.from(sfnSet).sort((a, b) => a - b);
+        const schs = Array.from(schSet).sort((a, b) => a - b);
+
+        // Build z matrix [subchannel][sfn], null for empty cells
+        const z = schs.map(sch =>
+            sfns.map(sfn => {
+                const key = `${sfn},${sch}`;
+                return dataMap.has(key) ? dataMap.get(key) : null;
+            })
+        );
+
+        // Heatmap trace
+        const heatmapTrace = {
+            type: 'heatmap',
+            x: sfns,
+            y: schs.map(s => `SubCh ${s}`),
+            z: z,
+            colorscale: COLORSCALE,
+            zmin: -128,
+            zmax: 0,
+            hoverongaps: false,
+            hovertemplate: 'Slot: %{x}<br>Subchannel: %{y}<br>RSRP: %{z} dBm<extra></extra>',
+            colorbar: {
+                title: { text: 'RSRP (dBm)', font: { color: '#a0a0c0' } },
+                tickfont: { color: '#a0a0c0' },
+            },
+        };
+
+        // Build +3dB event markers as vertical lines
+        const shapes = [];
+        const annotations = [];
+        const thresholdEvents = selData.events.filter(e => e.threshold_iterations > 0);
+
+        thresholdEvents.forEach(evt => {
+            shapes.push({
+                type: 'line',
+                x0: evt.sfn_normalized,
+                x1: evt.sfn_normalized,
+                y0: -0.5,
+                y1: schs.length - 0.5,
+                line: { color: 'rgba(255, 255, 0, 0.6)', width: 2, dash: 'dot' },
+            });
+            annotations.push({
+                x: evt.sfn_normalized,
+                y: schs.length - 0.5,
+                text: `+3dB x${evt.threshold_iterations}`,
+                showarrow: false,
+                font: { color: '#f1c40f', size: 10 },
+                yanchor: 'bottom',
+            });
+        });
+
+        // Add threshold line on colorbar
+        // (Plotly doesn't directly support this, but we can add a shape on the plot)
+
+        // Selection events as triangles on the time axis
+        const newSelections = selData.events.filter(e => e.resource_reused === 0);
+        const keepEvents = selData.events.filter(e => e.resource_reused === 1);
+
+        const selectionTrace = {
+            type: 'scatter',
+            x: newSelections.map(e => e.sfn_normalized),
+            y: newSelections.map(() => -0.8),
+            mode: 'markers',
+            marker: {
+                symbol: 'triangle-up',
+                size: 8,
+                color: '#3498db',
+            },
+            name: 'New Selection',
+            hovertemplate: 'New Selection<br>Slot: %{x}<br>CSR-A: %{customdata[0]}<br>L_a: %{customdata[1]}<br>Threshold: %{customdata[2]} dBm<extra></extra>',
+            customdata: newSelections.map(e => [e.csr_a_total, e.csr_a_after_exclusion, e.final_threshold_dBm]),
+        };
+
+        const keepTrace = {
+            type: 'scatter',
+            x: keepEvents.map(e => e.sfn_normalized),
+            y: keepEvents.map(() => -0.8),
+            mode: 'markers',
+            marker: {
+                symbol: 'diamond',
+                size: 6,
+                color: '#2ecc71',
+                opacity: 0.6,
+            },
+            name: 'Resource Kept',
+            hovertemplate: 'Resource Kept<br>Slot: %{x}<extra></extra>',
+        };
+
+        const layout = getLayout(`RNTI ${rnti} (veh${rnti}) - SPS Sensing Spectrogram`);
+        layout.shapes = shapes;
+        layout.annotations = annotations;
+        layout.yaxis.range = [-1.2, schs.length - 0.5];
+
+        Plotly.react('heatmap', [heatmapTrace, selectionTrace, keepTrace], layout, getPlotConfig());
+    }
+
+    async function loadAllVehicles() {
+        setStatus('Loading all vehicles (overview)...');
+        document.getElementById('showAllBtn').disabled = true;
+
+        try {
+            const rntiResp = await fetch(`${API}/api/rnti-list`);
+            const rntiData = await rntiResp.json();
+
+            // For overview: show selection events timeline for all vehicles
+            const allEvents = [];
+            for (const rnti of rntiData.rntis.slice(0, 50)) {  // limit to 50
+                const resp = await fetch(`${API}/api/selection-events?rnti=${rnti}`);
+                const data = await resp.json();
+                data.events.forEach(e => {
+                    allEvents.push({ ...e, rnti });
+                });
+            }
+
+            // Create a scatter plot: x=sfn, y=rnti, color=threshold_iterations
+            const traces = [{
+                type: 'scatter',
+                x: allEvents.filter(e => !e.resource_reused).map(e => e.sfn_normalized),
+                y: allEvents.filter(e => !e.resource_reused).map(e => `RNTI ${e.rnti}`),
+                mode: 'markers',
+                marker: {
+                    size: 6,
+                    color: allEvents.filter(e => !e.resource_reused).map(e => e.threshold_iterations),
+                    colorscale: [[0, '#2ecc71'], [0.5, '#f1c40f'], [1, '#e74c3c']],
+                    cmin: 0,
+                    cmax: 5,
+                    colorbar: { title: { text: '+3dB steps', font: { color: '#a0a0c0' } }, tickfont: { color: '#a0a0c0' } },
+                },
+                name: 'Selection Events',
+                hovertemplate: '%{y}<br>Slot: %{x}<br>+3dB steps: %{marker.color}<extra></extra>',
+            }];
+
+            const layout = getLayout('All Vehicles - Selection Events Overview');
+            layout.yaxis.title.text = 'Vehicle';
+            layout.yaxis.dtick = 1;
+
+            Plotly.react('heatmap', traces, layout, getPlotConfig());
+            setStatus(`Loaded ${allEvents.length} events from ${rntiData.rntis.length} vehicles`);
+        } catch (err) {
+            setStatus(`Error: ${err.message}`);
+        } finally {
+            document.getElementById('showAllBtn').disabled = false;
+        }
+    }
+
+    function setStatus(msg) {
+        document.getElementById('status').textContent = msg;
+    }
+
+    // Initialize on load
+    init();
+    </script>
+</body>
+</html>

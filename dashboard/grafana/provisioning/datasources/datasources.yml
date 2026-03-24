@@ -1,0 +1,11 @@
+apiVersion: 1
+
+datasources:
+  - name: SPS SQLite
+    type: frser-sqlite-datasource
+    uid: sps-sqlite
+    access: proxy
+    isDefault: true
+    editable: true
+    jsonData:
+      path: /data/sps/sps_metrics.db
